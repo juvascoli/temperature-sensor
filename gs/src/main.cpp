@@ -1,128 +1,115 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <ArduinoJson.h>
-#include <Adafruit_Sensor.h>
-#include <DHT.h>
+#include "DHT.h"
 
-#define boardLED 2       // LED onboard
-#define DHTPIN 12        // Pino de dados do DHT
-#define DHTTYPE DHT22    // Tipo do sensor
-#define POTPIN 34        // Pino do potenciômetro
+// ----------- WiFi ------------
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
 
-const char* ID        = "ID_do_Grupo";
-const char* moduleID  = "Meu_ESP32";
+// ----------- ThingSpeak MQTT ------------
+const char* mqtt_server = "mqtt3.thingspeak.com";
+const int mqtt_port = 1883;
 
-const char* SSID      = "Wokwi-GUEST";
-const char* PASSWORD  = "";
+// Credenciais do ThingSpeak 
+const char* channel_id = "2982369";
+const char* client_id = "CRAALDYfCxUIOi8gOAAiMDI";
+const char* mqtt_username = "CRAALDYfCxUIOi8gOAAiMDI";
+const char* mqtt_password = "bYu5jiSzzwqQjpIYCKcEkjkr";
 
-const char* BROKER_MQTT  = "172.208.54.189";  
-const int   BROKER_PORT  = 1883;
-const char* mqttUser     = "gs2025";
-const char* mqttPassword = "q1w2e3r4";
-
-#define TOPICO_PUBLISH  "2TDS/esp32/teste"
+String topic = "channels/" + String(channel_id) + "/publish";
 
 WiFiClient espClient;
 PubSubClient MQTT(espClient);
-JsonDocument doc;
-char buffer[256];
 
+// ----------- Sensor DHT22 ------------
+#define DHTPIN 15
+#define DHTTYPE DHT22
 DHT dht(DHTPIN, DHTTYPE);
 
-float temperatura;
-float umidade;
-int valorPot;
+// ----------- LEDs ------------
+const int ledVerde = 2;
+const int ledVermelho = 4;
 
-void initWiFi() {
-    WiFi.begin(SSID, PASSWORD);
-    Serial.print("Conectando ao Wi-Fi");
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(1000);
-        Serial.print(".");
+// ----------- Conexão MQTT ------------
+void conectaMQTT() {
+  while (!MQTT.connected()) {
+    Serial.print("Conectando ao MQTT... ");
+    if (MQTT.connect(client_id, mqtt_username, mqtt_password)) {
+      Serial.println("Conectado!");
+    } else {
+      Serial.print("Falha. Código: ");
+      Serial.println(MQTT.state());
+      delay(2000);
     }
-    Serial.println("\nWi-Fi conectado!");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-    Serial.print("MAC Address: ");
-    Serial.println(WiFi.macAddress());
-}
-
-void reconectaWiFi() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Reconectando Wi-Fi...");
-        initWiFi();
-    }
-}
-
-void initMQTT() {
-    MQTT.setServer(BROKER_MQTT, BROKER_PORT);
-    while (!MQTT.connected()) {
-        Serial.println("Conectando ao Broker MQTT...");
-        if (MQTT.connect(moduleID, mqttUser, mqttPassword)) {
-            Serial.println("Conectado ao Broker!");
-        } else {
-            Serial.print("Falha na conexão. Estado: ");
-            Serial.println(MQTT.state());
-            delay(2000);
-        }
-    }
-}
-
-void verificaConexoesWiFiEMQTT() {
-    reconectaWiFi();
-    if (!MQTT.connected()) {
-        initMQTT();
-    }
-    MQTT.loop();
-}
-
-void enviaEstadoOutputMQTT() {
-    MQTT.publish(TOPICO_PUBLISH, buffer);
-    Serial.println("Mensagem publicada com sucesso!");
-}
-
-void piscaLed() {
-    digitalWrite(boardLED, HIGH);
-    delay(300);
-    digitalWrite(boardLED, LOW);
+  }
 }
 
 void setup() {
-    Serial.begin(115200);
-    pinMode(boardLED, OUTPUT);
-    pinMode(POTPIN, INPUT);
-    digitalWrite(boardLED, LOW);
-    dht.begin();
-    initWiFi();
-    initMQTT();
+  Serial.begin(115200);
+  pinMode(ledVerde, OUTPUT);
+  pinMode(ledVermelho, OUTPUT);
+  dht.begin();
+
+  Serial.print("Conectando ao WiFi");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi conectado!");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+
+  
+  MQTT.setServer(mqtt_server, mqtt_port);
+  conectaMQTT();
 }
 
 void loop() {
-    verificaConexoesWiFiEMQTT();
+ 
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.reconnect();
+  }
 
-    temperatura = dht.readTemperature();
-    umidade = dht.readHumidity();
-    valorPot = analogRead(POTPIN);
+  if (!MQTT.connected()) {
+    conectaMQTT();
+  }
 
-    doc.clear();
-    doc["ID"] = ID;
-    doc["Sensor"] = moduleID;
-    doc["IP"] = WiFi.localIP().toString();
-    doc["MAC"] = WiFi.macAddress();
+  MQTT.loop();
 
-    if (!isnan(temperatura) && !isnan(umidade)) {
-        doc["Temperatura"] = temperatura;
-        doc["Umidade"] = umidade;
-    } else {
-        doc["Temperatura"] = "Erro";
-        doc["Umidade"] = "Erro";
-    }
+  
+  float temp = dht.readTemperature();
 
-    doc["Potenciometro"] = valorPot;
+  if (isnan(temp)) {
+    Serial.println("Falha na leitura do DHT!");
+    delay(5000);
+    return;
+  }
 
-    serializeJson(doc, buffer);
-    Serial.println(buffer);
-    enviaEstadoOutputMQTT();
-    piscaLed();
-    delay(10000);
+  if (temp >= 35.0) {
+    digitalWrite(ledVerde, LOW);
+    digitalWrite(ledVermelho, HIGH);
+    Serial.println("Temperatura PERIGOSA");
+  } else {
+    digitalWrite(ledVerde, HIGH);
+    digitalWrite(ledVermelho, LOW);
+    Serial.println("Temperatura OK");
+  }
+
+  // Montar e enviar payload MQTT
+  String payload = "field1=" + String(temp);
+  Serial.print("Enviando para o tópico: ");
+  Serial.println(topic);
+  Serial.print("Payload: ");
+  Serial.println(payload);
+
+  boolean enviado = MQTT.publish(topic.c_str(), payload.c_str());
+
+  if (enviado) {
+    Serial.println("Temperatura enviada ao ThingSpeak via MQTT!");
+  } else {
+    Serial.println("Falha ao enviar via MQTT.");
+  }
+
+  delay(20000); 
 }
